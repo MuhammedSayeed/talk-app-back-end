@@ -1,0 +1,14 @@
+import express from "express";
+import * as controller from "./controller.js"
+import { verifyToken } from "../user/controller.js";
+import typingLimiter from "../../middlewares/rateLimiter.js";
+
+const router = express.Router();
+
+router.post("/" , verifyToken , controller.createChat);
+router.get("/" , verifyToken , controller.getuserChats);
+
+
+
+
+export default router;
