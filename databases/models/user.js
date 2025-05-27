@@ -3,20 +3,37 @@ const { Schema } = mongoose;
 
 
 const userSchema = new Schema({
-    username : String,
+    username: String,
     name: String,
     email: String,
-    password: {
-        type: String,
-    },
-    image: String,
-    bio : String,
-    verified: Boolean,
-    isOnline : {
+    verified: {
         type: Boolean,
         default: false
     },
-    lastSeen : {
+    password: {
+        type: String,
+    },
+    passwordChangedAt: {
+        type: Date
+    },
+    emailChangedAt :{
+        type: Date
+    },
+    profilePic: {
+        src: String,
+        public_id: String,
+    },
+    coverPic: {
+        src: String,
+        public_id: String,
+    },
+    bio: String,
+    verified: Boolean,
+    isOnline: {
+        type: Boolean,
+        default: false
+    },
+    lastSeen: {
         type: Date,
         default: null
     },
@@ -25,9 +42,12 @@ const userSchema = new Schema({
         enum: ["credentials", "google", "github"],
         default: "credentials"
     },
-    providerId : String,
+    providerId: String
 }, {
     timestamps: true,
 });
 
-export const UserModel = mongoose.model('User', userSchema);
+userSchema.index({ username: 1 }, { background: true })
+userSchema.index({ email: 1 }, { background: true })
+
+export const UserModel = mongoose.models.User || mongoose.model("User", userSchema)

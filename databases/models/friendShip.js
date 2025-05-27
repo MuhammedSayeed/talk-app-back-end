@@ -17,4 +17,7 @@ const friendShipSchema = new Schema({
     timestamps: true,
 });
 
+friendShipSchema.index({ friendA: 1 });
+friendShipSchema.index({ friendB: 1 });
+
 export const FriendShipModel = mongoose.model('FriendShip', friendShipSchema);

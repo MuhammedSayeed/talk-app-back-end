@@ -11,7 +11,16 @@ const messageSchema = new Schema({
         type: Schema.Types.ObjectId,
         ref: 'Chat',
     },
-    content: String
+    content: String,
+    type : {
+        type: String,
+        enum: ['text', 'image'],
+        default: 'text',
+    },
+    isRead : {
+        type : Boolean,
+        default : false
+    }
 }, {
     timestamps: true,
 });

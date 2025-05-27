@@ -1,41 +1,32 @@
 import { catchError } from "../../middlewares/CatchError.js"
-import { extractUserData, generateToken, sendError } from "../../utils/index.js";
+import { extractUserData, generateToken, generateUniqueUsername, generateVerificationCode, getImageInHighRes, sendError } from "../../utils/index.js";
 import { UserModel } from "../../../databases/models/user.js"
-import jwt from 'jsonwebtoken'
-import bcrypt from 'bcrypt'
-import { BlockModel } from "../../../databases/models/block.js";
-import { FriendShipModel } from "../../../databases/models/friendShip.js";
-import { FriendRequestModel } from "../../../databases/models/friendRequest.js";
-import pusher from "../../config/pusher.js";
-import redisClient from "../../config/redis.js";
-
+import { AuthService } from "../../services/auth-service.js";
+import { RelationshipService } from "../../services/relationship-service.js";
+import { MediaService } from "../../services/media-service.js";
+import { StatusService } from "../../services/status-service.js";
+import { passwordResetTokenModel } from "../../../databases/models/PasswordResetTokens.js";
+import { sendResetPasswordLink, sendVerifyEmail } from "../../config/email.js";
+import { ApiFeatures } from "../../utils/apiFeatures.js";
+import crypto from "crypto";
+import { VerificationCodeModel } from "../../../databases/models/code.js";
 
 const search = catchError(
     async (req, res, next) => {
         const loggedInUser = req.user._id;
-        const { search } = req.query;
-
-        let searchFilter = {};
-        if (search) {
-            searchFilter = {
-                $or: [
-                    { username: { $regex: search, $options: 'i' } },
-                    { name: { $regex: search, $options: 'i' } },
-                    { email: { $regex: search, $options: 'i' } }
-                ]
-            }
-        }
-        const query = {
-            _id: { $ne: loggedInUser },
-            ...searchFilter
-        }
-        const users = await UserModel.find(query).select('-password -createdAt -provider -__v');
-
+        // build base query
+        const rawQuery = UserModel.find({ _id: { $ne: loggedInUser } }).select(
+            "-password -createdAt -provider -__v -coverPic -email -isOnline -lastSeen -updatedAt",
+        )
+        // apply api features
+        const features = ApiFeatures.create(rawQuery, req.query, "regular")
+        features.search().paginate()
+        // execute api features
+        const { data, metadata } = await features.execute()
         res.status(200).json({
-            message: "success",
-            results: {
-                users
-            }
+            success: true,
+            metadata,
+            results: data
         })
     }
 )
@@ -45,116 +36,137 @@ const getUser = catchError(
         const userId = req.params.id;
 
         // fetch user details
-        const user = await UserModel.findById(userId).select('-password -createdAt -provider -__v');
+        const user = await UserModel.findById(userId).select("-password -__v -provider -providerId -isOnline")
         if (!user) return sendError(next, "User not found.", 404);
 
         // Fetch all relevant relationships in parallel
-        const [blockStatus, friendship, friendRequest] = await Promise.all([
-            BlockModel.findOne({
-                $or: [
-                    { blocker: userId, blocked: loggedInUser },
-                    { blocker: loggedInUser, blocked: userId }
-                ]
-            }),
-            FriendShipModel.findOne({
-                $or: [
-                    { friendA: loggedInUser, friendB: userId },
-                    { friendA: userId, friendB: loggedInUser }
-                ]
-            }),
-            FriendRequestModel.findOne({
-                $or: [
-                    { sender: userId, receiver: loggedInUser, status: "pending" },
-                    { sender: loggedInUser, receiver: userId, status: "pending" }
-                ]
-            })
-        ])
+        const relationships = await RelationshipService.getRelationships(loggedInUser, userId);
+        const userData = extractUserData(user);
 
-
-        //response data
         const response = {
             message: "success",
             results: {
-                isBlocked: !!blockStatus,  // True if user is blocked
-                blockDetails: blockStatus || null,  // Include details only if blocked
-                isFriend: !!friendship,  // True if they are friends
-                friendShipDetails: friendship || null,  // Include details if friends
-                isPendingFriendRequest: !!friendRequest,
-                pendingFriendRequest: friendRequest || null,  // Include friend request details if exist
-                user
+                ...relationships,
+                user: userData
             }
-        };
+        }
 
         res.status(200).json(response)
+
+    }
+)
+const verifyPassword = catchError(
+    async (req, res, next) => {
+        // check if user is not using social user
+        if (req.user.provider !== "credentials") return next();
+        const userId = req.user._id;
+        const { password } = req.body;
+        // matching user password
+        const user = await UserModel.findById(userId).select('password');
+        const isMatch = await AuthService.verifyPassword(password, user.password);
+        if (!isMatch) return sendError(next, "Invalid password.", 401);
+        next();
+    }
+)
+const verifyEmail = catchError(
+    async (req, res, next) => {
+        const { _id: userId, verified } = req.user;
+        // check if user is already verified
+        if (verified) return sendError(next, "Account already verified.", 400);
+
+        // make sure the token is valid and not expired
+        const { code } = req.body;
+        const existingCode = await VerificationCodeModel.findOne({ code, user: userId, isUsed: false, expireDate: { $gt: new Date() } });
+        if (!existingCode) return sendError(next, "invalid/expired code", 404);
+
+        // verify user && delete code
+        Promise.all([
+            UserModel.findByIdAndUpdate(userId, { verified: true }, { new: true }).select("verified email").lean(),
+            VerificationCodeModel.findByIdAndDelete(existingCode._id).lean()
+        ])
+
+        res.status(200).json({
+            message: "success",
+            results: {
+                verified: true
+            }
+        })
+
+
+    }
+)
+const verifyToken = catchError(
+    async (req, res, next) => {
+        // Extract token
+        const token = req.cookies?.token ?? req.query?.token;
+        if (!token) return sendError(next, 'Not authorized', 401);
+        // Verify token
+        const decoded = AuthService.verifyToken(token);
+        if (!decoded?._id) return sendError(next, 'Invalid token', 401);
+        // get user
+        const user = await UserModel.findById(decoded._id).select("passwordChangedAt").lean();
+        if (!user) return sendError(next, 'User not found', 401);
+        // check if token is old
+        if (user.passwordChangedAt) {
+            const changePasswordTimestamp = ~~(user.passwordChangedAt.getTime() / 1000);
+            if (changePasswordTimestamp > decoded.iat) {
+                return sendError(next, "Token expired", 401);
+            }
+        }
+        // pass user
+        req.user = decoded;
+        next();
     }
 )
 const signup = catchError(
     async (req, res, next) => {
         const { username, name, email, password } = req.body;
-
-        // check if username or email is unique
-        const existingUser = await UserModel.findOne({
-            $or: [{ username }, { email }]
+        // Create user
+        const result = await AuthService.signup({ username, name, email, password });
+        // if error return it
+        if (result && result.error) return sendError(next, result.message, result.code);
+        // generate verification code and send to email
+        const newCode = generateVerificationCode();
+        await VerificationCodeModel.create({
+            user: result._id,
+            code: newCode
         })
-        if (existingUser) return sendError(next, "User already exists.", 400);
+        // send email with code
+        await sendVerifyEmail(email, newCode)
 
-        // hash the password
-        const hashedPassword = bcrypt.hashSync(password, Number(process.env.ROUND));
+        // Generate token
+        const userDataToken = extractUserData(result, true)
+        const token = generateToken(userDataToken);
+        // set token as cookies
+        AuthService.setAuthToken(res, token);
+        const userData = extractUserData(result);
 
-        // save user 
-        const newUser = new UserModel({
-            username,
-            name,
-            email,
-            password: hashedPassword
-        })
-        await newUser.save();
-
-        // generate token and send it back as a cookie
-        const userData = extractUserData(newUser);
-        const token = generateToken(userData);
-
-        res.cookie('token', token, {
-            httpOnly: true,
-            secure: false, // Set to true in production with HTTPS
-            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-        });
         res.status(201).json({
             message: "success",
             results: {
-                user: userData
-            }
+                user: userData,
+            },
         })
+
     }
 )
-const signIn = catchError(
+const signin = catchError(
     async (req, res, next) => {
         const { emailOrUsername, password } = req.body;
 
-        const user = await UserModel.findOne({
-            $or: [{ email: emailOrUsername }, { username: emailOrUsername }]
-        });
+        const results = await AuthService.signIn(emailOrUsername, password);
+        if (results && results.error) return sendError(next, results.message, results.code);
 
-        if (!user) return sendError(next, "Invalid username/email or password", 401);
+        const userDataToken = extractUserData(results, true)
+        const token = generateToken(userDataToken)
+        AuthService.setAuthToken(res, token);
+        const userData = extractUserData(results);
 
-        const isMatch = await bcrypt.compare(password, user.password);
-
-        if (!isMatch) return sendError(next, 'invalid email or password', 401);
-
-        // generate token and send it back as a cookie
-        const userData = extractUserData(user);
-        const token = generateToken(userData);
-
-        res.cookie('token', token, {
-            httpOnly: true,
-            secure: false, // Set to true in production with HTTPS
-            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-        });
         res.status(200).json({
             message: "success",
             results: {
-                user: userData
-            }
+                user: userData,
+            },
         })
 
     }
@@ -162,103 +174,315 @@ const signIn = catchError(
 const socialAuth = catchError(
     async (req, res, next) => {
         const { name, email, image, provider, providerId } = req.body;
-
+        // increase dimension of image
+        const highResImage = getImageInHighRes(image, provider);
+        // generate unique username
+        const username = generateUniqueUsername(name, providerId)
+        // search for user
         let user = await UserModel.findOne({ email });
+        if (user && (user.provider !== provider || user.providerId !== providerId)) {
+            return sendError(next, "Account already exists with different provider.", 400);
+        }
+        // register user if not exists
         if (!user) {
             user = await UserModel.create({
-                name,
-                email,
-                image,
-                provider,
-                providerId
+                name: name,
+                email: email,
+                profilePic: {
+                    src: highResImage
+                },
+                provider: provider,
+                providerId: providerId,
+                verified: true,
+                username: username
             })
         }
-        const userData = extractUserData(user);
-        const token = generateToken(userData);
+        // generate temp token for exchabge
+        const tempToken = generateToken({
+            _id: user._id
+        }, "1m")
 
         res.status(200).json({
-            message: "Success",
+            message: "success",
+            tempToken
+        })
+    }
+)
+const exchangeToken = catchError(
+    async (req, res, next) => {
+        const userId = req.user._id;
+        // search for user
+        const user = await UserModel.findById(userId);
+        if (!user) return sendError(next, "someting went wrong", 400);
+        // generate token and extract user data
+        const tokenData = extractUserData(user, true);
+        const token = generateToken(tokenData);
+        const userData = extractUserData(user);
+        // set token as cookie
+        AuthService.setAuthToken(res, token)
+
+        res.status(200).json({
+            message: "success",
             results: {
                 user: userData,
-                token: token,
+            }
+        })
+
+    }
+)
+const me = catchError(
+    async (req, res, next) => {
+        const userId = req.user._id;
+        // get logged in user profile
+        const user = await UserModel.findById(userId).select("-password -__v")
+        if (!user) return sendError(next, "User not found.", 404);
+        // extract user data
+        const userData = extractUserData(user);
+
+        res.status(200).json({
+            message: "success",
+            results: {
+                user: userData,
+            },
+        })
+
+    }
+)
+const logout = catchError(
+    async (req, res, next) => {
+        AuthService.clearAuthToken(res);
+        res.status(200).json({
+            message: "success",
+        });
+    }
+)
+const uploadProfileImage = catchError(
+    async (req, res, next) => {
+        const userId = req.user._id;
+        const file = req.file;
+        // upload profile image
+        const user = await MediaService.uploadProfileImage(userId, file);
+        if (!user) return sendError(next, "User not found.", 404);
+
+        res.status(200).json({
+            message: "success",
+            results: {
+                profilePic: user.profilePic,
+            },
+        })
+
+    }
+)
+const uploadCoverImage = catchError(
+    async (req, res, next) => {
+        const userId = req.user._id
+        const file = req.file
+        // upload cover image
+        const user = await MediaService.uploadCoverImage(userId, file);
+        if (!user) return sendError(next, "User not found.", 404);
+
+        res.status(200).json({
+            message: "success",
+            results: {
+                coverPic: user.coverPic,
+            },
+        })
+
+    }
+)
+const updateBio = catchError(
+    async (req, res, next) => {
+        const userId = req.user._id
+        const { bio } = req.body
+        // update bio
+        const user = await UserModel.findByIdAndUpdate(userId, { bio }, { new: true }).select("bio _id").lean()
+        if (!user) return sendError(next, "User not found.", 404);
+
+        res.status(200).json({
+            message: "success",
+            results: {
+                bio: user.bio,
+            },
+        })
+    }
+)
+const updateName = catchError(
+    async (req, res, next) => {
+        const userId = req.user._id
+        const { name } = req.body
+        // update name
+        const user = await UserModel.findByIdAndUpdate(userId, { name }, { new: true }).select("name _id").lean()
+        if (!user) return sendError(next, "User not found.", 404);
+
+        // Generate token and send it back as a cookie
+        const userData = extractUserData(user);
+        const token = generateToken(userData)
+
+        AuthService.setAuthToken(res, token)
+        res.status(200).json({
+            message: "success",
+            results: {
+                name: user.name,
+            },
+        })
+
+    }
+)
+const updateUsername = catchError(
+    async (req, res, next) => {
+        const userId = req.user._id
+        const { username } = req.body
+
+        // update username
+        const user = await UserModel.findByIdAndUpdate(userId, { username }, { new: true }).select("username _id").lean()
+        if (!user) return sendError(next, "Username already the same or user not found.", 400)
+        // Generate token and send it back as a cookie
+        const userData = extractUserData(user)
+        const token = generateToken(userData)
+
+        AuthService.setAuthToken(res, token)
+
+        res.status(200).json({
+            message: "success",
+            results: {
+                username: user.username,
+            },
+        })
+
+    }
+)
+const updateEmail = catchError(
+    async (req, res, next) => {
+        const { _id: userId } = req.user;
+        const { email } = req.body
+
+        // check if email is already in use
+        const existingUser = await UserModel.exists({ email });
+        if (existingUser) return sendError(next, "Email already exists.", 400);
+        // get user
+        const user = await UserModel.findById(userId).select("email emailChangedAt verified _id");
+        // check if 7 days passed
+        if (user.emailChangedAt) {
+            const lastEmailChangeDate = new Date(user.emailChangedAt);
+            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+            if (lastEmailChangeDate > sevenDaysAgo) {
+                return sendError(next, "try change email later", 403);
+            }
+        }
+        // update email
+        user.email = email.toLowerCase();
+        user.emailChangedAt = Date.now();
+        user.verified = false;
+        await user.save();
+
+        // generate new code & send email with code
+        const newCode = generateVerificationCode();
+        Promise.all([
+            VerificationCodeModel.create({ user: userId, code: newCode }),
+            sendVerifyEmail(email, newCode)
+        ])
+
+        // generate new token 
+        const userData = extractUserData(user, true);
+        const token = generateToken(userData);
+
+        AuthService.setAuthToken(res, token);
+
+        res.status(200).json({
+            message: "success",
+            results: {
+                email: user.email,
+                verified: user.verified,
+                emailChangedAt: user.emailChangedAt
+            },
+        })
+
+    }
+)
+const updatePassword = catchError(
+    async (req, res, next) => {
+        const userId = req.user._id
+        const { newPassword } = req.body
+        // find user
+        const user = await UserModel.findById(userId).select("password passwordChangedAt");
+        if (!user) return sendError(next, "User not found.", 404);
+        // check if 7 days passed
+        if (user.passwordChangedAt) {
+            const lastPasswordChangeDate = new Date(user.passwordChangedAt);
+            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+            if (lastPasswordChangeDate > sevenDaysAgo) {
+                return sendError(next, "try change password later", 403);
+            }
+        }
+        // hash password
+        const hashedPassword = await AuthService.hashPassword(newPassword);
+        const passwordChangedAt = Date.now()
+        // update user password
+        user.password = hashedPassword;
+        user.passwordChangedAt = passwordChangedAt;
+        await user.save();
+        // Generate token and send it back as a cookie
+        const userData = extractUserData(user)
+        const token = generateToken(userData)
+        AuthService.setAuthToken(res, token);
+        res.status(200).json({
+            message: "success",
+            results: {
+                passwordChangedAt: passwordChangedAt
             }
         })
     }
 )
-const verifyToken = catchError(
+const forgotPassword = catchError(
     async (req, res, next) => {
-        const { token } = req.cookies;
-
-        if (!token) return sendError(next, 'Not authorized', 401);
-        const decoded = jwt.verify(token, process.env.JWT_KEY);
-
-        req.user = decoded;
-        next();
-    }
-)
-const blockUser = catchError(
-    async (req, res, next) => {
-        const loggedInUser = req.user._id;
-        const { _id: blockedUserId } = req.body;
-
-        // check if user is exist
-        const user = await UserModel.findById(blockedUserId);
-        if (!user) return sendError(next, "User not found.", 404);
-
-        // check if user already blocked
-        const blockedUser = await BlockModel.findOne({
-            $or: [
-                { blocker: loggedInUser, blocked: blockedUserId },
-                { blocker: blockedUserId, blocked: loggedInUser }
-            ]
-        });
-        if (blockedUser) return sendError(next, "Something went wrong.", 400);
-
-        // delete pending friend request if existing
-        await FriendRequestModel.findOneAndDelete({
-            $or: [
-                { sender: loggedInUser, receiver: blockedUserId, status: "pending" },
-                { sender: blockedUserId, receiver: loggedInUser, status: "pending" }
-            ]
-        });
-
-
-        // Delete friendship if exists
-        await FriendShipModel.findOneAndDelete({
-            $or: [
-                { friendA: loggedInUser, friendB: blockedUserId },
-                { friendA: blockedUserId, friendB: loggedInUser }
-            ]
-        });
-
-        // block the user
-        const newBlock = new BlockModel({
-            blocker: loggedInUser,
-            blocked: blockedUserId
-        });
-        await newBlock.save();
-
-        return res.status(200).json({ message: "success" });
+        const { email } = req.body;
+        // check if user exists
+        const user = await UserModel.findOne({ email, provider: "credentials" }).select('_id').lean();
+        if (!user) return res.status(404).json({ message: "User not found" });
+        // check if there are prev token
+        const existingToken = await passwordResetTokenModel.findOne({
+            user: user._id,
+            expiresAt: { $gt: new Date() }
+        }).select('_id').lean();
+        if (existingToken) return sendError(next, "A reset link was already sent", 400);
+        // generate new token
+        const newToken = generateToken({ user: user._id }, "15m");
+        const hashedToken = crypto.createHash("sha256").update(newToken).digest('hex');
+        const expiredTime = new Date(Date.now() + 15 * 60 * 1000);
+        // save token and send email with link
+        await Promise.all([
+            passwordResetTokenModel.create({
+                user: user._id,
+                token: hashedToken,
+                expiresAt: expiredTime
+            }),
+            sendResetPasswordLink(email, newToken)
+        ])
+        res.status(200).json({
+            message: "success"
+        })
 
     }
 )
-const unblock = catchError(
+const resetPassword = catchError(
     async (req, res, next) => {
-        const loggedInUser = req.user._id;
-        const { _id: blockedUserId } = req.body;
-
-        // check if user is exist
-        const user = await UserModel.findById(blockedUserId);
-        if (!user) return sendError(next, "User not found.", 404);
-
-        // delete block doc
-        await BlockModel.deleteOne({
-            $and: [
-                { blocker: loggedInUser },
-                { blocked: blockedUserId }
-            ]
-        });
-
+        const { token, newPassword } = req.body;
+        // check if token exists
+        const hashedToken = crypto.createHash("sha256").update(token).digest('hex');
+        const resetToken = await passwordResetTokenModel.findOne({
+            token: hashedToken,
+            expiresAt: { $gt: new Date() }
+        }).populate('user', '_id').lean();
+        if (!resetToken) return sendError(next, "Invalid or expired token.", 400);
+        if (!resetToken.user) return sendError(next, "User not found.", 404);
+        // hash password
+        const hashedPassword = await AuthService.hashPassword(newPassword);
+        const passwordChangedAt = Date.now()
+        // update password amd delete token
+        await Promise.all([
+            UserModel.findOneAndUpdate({ _id: resetToken.user._id }, { password: hashedPassword, passwordChangedAt }),
+            passwordResetTokenModel.deleteOne({ _id: resetToken._id })
+        ]);
         res.status(200).json({
             message: "success"
         })
@@ -267,80 +491,38 @@ const unblock = catchError(
 const keepAlive = catchError(
     async (req, res, next) => {
         const userId = req.user._id;
-        console.log('🟢 Keepalive request for user:', userId);
+        console.log("🟢 Keepalive request for user:", userId)
+        await StatusService.keepAlive(userId);
+        res.status(200).json({ message: "success" })
 
-        // Update user status in MongoDB
-        const user = await UserModel.findByIdAndUpdate(
-            userId, 
-            { isOnline: true, lastSeen: null },
-            { new: true } 
-        )
-        
-        if (!user) return res.status(404).json({ message: "User not found" });
-
-        await redisClient.set(`user:online:${userId}`, 'true');
-        await redisClient.expire(`user:online:${userId}`, 60);
-        
-
-        await pusher.trigger(`user-status-${userId}`, `user-status-update`, {
-            name: user.name,
-            isOnline: true,
-            lastSeen: null
-        })
-        console.log('✅ Pusher event triggered');
-
-        res.status(200).json({ message: "success" });
     }
-);
-const listenForExpiry = async () => {
-    console.log('🔵 Starting Redis expiry listener');
-    const subscriber = redisClient.duplicate();
-    
-    try {
-        await subscriber.connect();
-        
-        await subscriber.configSet('notify-keyspace-events', 'Ex');
-        
-        await subscriber.subscribe('__keyevent@0__:expired', async (key) => {
-            
-            if (key.startsWith('user:online:')) {
-                const userId = key.split(':')[2];
-
-                const date = new Date();
-                const user = await UserModel.findByIdAndUpdate(
-                    userId, 
-                    { isOnline: false, lastSeen: date },
-                    { new: true }
-                )
-
-                if (!user) return;
-
-                await pusher.trigger(`user-status-${userId}`, `user-status-update`, {
-                    name: user.name,
-                    isOnline: user.isOnline,
-                    lastSeen: user.lastSeen
-                });
-                console.log('✅ Offline status Pusher event triggered');
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Error in expiry listener:', error);
-    }
+)
+const setupRedisListener = async () => {
+    await StatusService.setupExpiryListener();
 }
-
-
-listenForExpiry();
+await setupRedisListener();
 
 
 export {
-    socialAuth,
-    signup,
-    signIn,
-    verifyToken,
     search,
+    verifyToken,
     getUser,
-    blockUser,
-    unblock,
+    verifyEmail,
+    verifyPassword,
+    signup,
+    signin,
+    me,
+    logout,
+    uploadProfileImage,
+    uploadCoverImage,
+    updateBio,
+    updateName,
+    updateUsername,
+    updateEmail,
+    updatePassword,
     keepAlive,
+    socialAuth,
+    exchangeToken,
+    forgotPassword,
+    resetPassword
 }

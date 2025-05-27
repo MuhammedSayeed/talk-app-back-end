@@ -4,7 +4,8 @@ import { UserModel } from "../../../databases/models/user.js";
 import { NotificationModel } from "../../../databases/models/notification.js";
 import { catchError } from "../../middlewares/CatchError.js";
 import { sendError } from "../../utils/index.js";
-import pusher from "../../config/pusher.js";
+import { io } from "../../config/socket.js";
+
 
 const sendFriendRequest = catchError(
     async (req, res, next) => {
@@ -34,7 +35,7 @@ const sendFriendRequest = catchError(
             relatedId: newFriendRequest._id
         });
 
-        pusher.trigger(`user-${friendId}`, "friend-request-notification", {
+        io.to(`user-${friendId}`).emit("friend-request-notification", {
             message: "You received a new friend request",
             senderName: req.user.name,
         });
@@ -65,7 +66,7 @@ const getMyFriendRequests = catchError(
         const friendRequests = await FriendRequestModel.find({
             receiver: loggedInUser,
             status: "pending"
-        }).populate("sender", "name _id")
+        }).populate("sender", "name _id profilePic")
 
         res.status(200).json({ message: "success", results: { friendRequests } });
     }
@@ -98,16 +99,17 @@ const acceptFriendRequest = catchError(
             user: friendRequest.sender,
             relatedId: friendShip._id,
             type: "accept-friend-request",
-            acceptedBy : friendRequest.receiver
+            acceptedBy: friendRequest.receiver
         })
         await newNotification.save();
 
 
-        // Trigger a Pusher event
-        await pusher.trigger(`user-${friendRequest.sender._id}`, "accept-friend-request-notification", {
+        io.to(`user-${friendRequest.sender._id}`).emit("accept-friend-request-notification", {
             message: "friend request is accepted",
             user: friendRequest.receiver.name,
         })
+
+
 
         res.status(200).json({ message: "success" });
 
@@ -117,9 +119,6 @@ const acceptFriendRequest = catchError(
 const declineFriendRequest = catchError(
     async (req, res, next) => {
         const { _id: friendRequestId } = req.body;
-
-        console.log("friendRequestId : " + friendRequestId);
-
 
         // Check if friend request exists
         const friendRequest = await FriendRequestModel.findOneAndDelete(

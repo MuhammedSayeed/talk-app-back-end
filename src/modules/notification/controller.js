@@ -24,8 +24,8 @@ const getNotifications = catchError(
     async (req, res, next) => {
         const user = req.user._id
         const { type } = req.params;
-
-        const notifications = await NotificationModel.find({ user, type,}).populate("acceptedBy" , "_id name username")
+        // get accepted friend request notification
+        const notifications = await NotificationModel.find({ user, type}).populate("acceptedBy" , "_id name username profilePic")
         .sort({ createdAt: -1 })
 
         res.status(200).json({ message: "success", results: notifications });
