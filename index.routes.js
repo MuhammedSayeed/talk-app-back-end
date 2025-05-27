@@ -21,7 +21,9 @@ export function init(app) {
     app.use(cors(corsOptions));
     app.use(express.json());
     app.use(cookieParser());
-    
+    app.get("/", (req, res) => {
+        res.send("Hello World!")
+    })
     app.use(`${ENDPOINTBASE}/users`, userRouter)
     app.use(`${ENDPOINTBASE}/codes`, codeRouter)
     app.use(`${ENDPOINTBASE}/blocks`, blockRouter)
