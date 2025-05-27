@@ -6,7 +6,7 @@ import http from 'http';
 import { setupSocket } from './src/config/socket.js';
 dotenv.config();
 const app = express();
-const port = 3000;
+const PORT = process.env.PORT || 3000;
 
 const server = http.createServer(app)
 
@@ -23,9 +23,9 @@ init(app)
 dbConnection()
 
 
-server.listen(process.env.PORT || port, () => {
-    console.log(`Server is running on port ${port}`);
-})
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
 
 
 
