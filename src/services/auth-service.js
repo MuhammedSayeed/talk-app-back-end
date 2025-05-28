@@ -81,21 +81,4 @@ export class AuthService {
     static async verifyPassword(password, savedPassword) {
         return await bcrypt.compare(password, savedPassword);
     }
-    static setAuthToken(res, token) {
-        res.cookie("token", token, {
-            httpOnly: true,
-            secure: true, // MUST be true when sameSite: "None"
-            sameSite: "None", // Required for cross-site requests
-            maxAge: 7 * 24 * 60 * 60 * 1000,
-            domain: undefined, // Don't set domain for cross-site cookies
-          });
-    }
-    static clearAuthToken(res) {
-        res.clearCookie("token", {
-            httpOnly: true,
-            secure: true,
-            sameSite: "None",
-            domain: undefined, // Same as when setting
-          });
-    }
 }

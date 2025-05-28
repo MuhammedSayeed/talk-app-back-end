@@ -21,26 +21,20 @@ const sendResetPasswordLink = async (email, token) => {
             subject: "Reset Your Password",
             html: ResetPasswordHtml(resetUrl)
         });
-        console.log(`Email sent: ${info.messageId}`);
         return info.messageId;
     } catch (error) {
-        console.error("Email sending failed:", error.message);
         throw error;
     }
 
 }
 
 const sendVerifyEmail = async (email, code) => {
-    const info = await transporter.sendMail({
+    await transporter.sendMail({
         from: '"Talk App" <mhmdsayed90031@gmail.com>',
         to: email,
         subject: "Verify your email",
         html: VerifyEmailHtml(code)
     })
-
-    console.log(info);
-    
-    
 }
 
 export {

@@ -79,16 +79,20 @@ const verifyEmail = catchError(
         const existingCode = await VerificationCodeModel.findOne({ code, user: userId, isUsed: false, expireDate: { $gt: new Date() } });
         if (!existingCode) return sendError(next, "invalid/expired code", 404);
 
-        // verify user && delete code
-        Promise.all([
-            UserModel.findByIdAndUpdate(userId, { verified: true }, { new: true }).select("verified email").lean(),
-            VerificationCodeModel.findByIdAndDelete(existingCode._id).lean()
-        ])
+        // get user
+        const user = await UserModel.findByIdAndUpdate(userId, { verified: true }, { new: true }).select("-password -__v -provider -providerId -isOnline -lastSeen -updatedAt").lean()
+        // delete code
+        await VerificationCodeModel.findByIdAndDelete(existingCode._id).lean()
+
+        // generate token
+        const userDataToken = extractUserData(user, true)
+        const token = generateToken(userDataToken);
 
         res.status(200).json({
             message: "success",
             results: {
-                verified: true
+                verified: true,
+                token
             }
         })
 
@@ -137,14 +141,13 @@ const signup = catchError(
         // Generate token
         const userDataToken = extractUserData(result, true)
         const token = generateToken(userDataToken);
-        // set token as cookies
-        AuthService.setAuthToken(res, token);
         const userData = extractUserData(result);
 
         res.status(201).json({
             message: "success",
             results: {
                 user: userData,
+                token
             },
         })
 
@@ -159,13 +162,13 @@ const signin = catchError(
 
         const userDataToken = extractUserData(results, true)
         const token = generateToken(userDataToken)
-        AuthService.setAuthToken(res, token);
         const userData = extractUserData(results);
 
         res.status(200).json({
             message: "success",
             results: {
                 user: userData,
+                token
             },
         })
 
@@ -218,13 +221,13 @@ const exchangeToken = catchError(
         const tokenData = extractUserData(user, true);
         const token = generateToken(tokenData);
         const userData = extractUserData(user);
-        // set token as cookie
-        AuthService.setAuthToken(res, token)
+
 
         res.status(200).json({
             message: "success",
             results: {
                 user: userData,
+                token
             }
         })
 
@@ -246,14 +249,6 @@ const me = catchError(
             },
         })
 
-    }
-)
-const logout = catchError(
-    async (req, res, next) => {
-        AuthService.clearAuthToken(res);
-        res.status(200).json({
-            message: "success",
-        });
     }
 )
 const uploadProfileImage = catchError(
@@ -318,11 +313,11 @@ const updateName = catchError(
         const userData = extractUserData(user);
         const token = generateToken(userData)
 
-        AuthService.setAuthToken(res, token)
         res.status(200).json({
             message: "success",
             results: {
                 name: user.name,
+                token
             },
         })
 
@@ -340,12 +335,12 @@ const updateUsername = catchError(
         const userData = extractUserData(user)
         const token = generateToken(userData)
 
-        AuthService.setAuthToken(res, token)
 
         res.status(200).json({
             message: "success",
             results: {
                 username: user.username,
+                token
             },
         })
 
@@ -365,12 +360,11 @@ const updateEmail = catchError(
         if (user.emailChangedAt) {
             const lastEmailChangeDate = new Date(user.emailChangedAt);
             const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-            if (lastEmailChangeDate > sevenDaysAgo) {
-                return sendError(next, "try change email later", 403);
-            }
+            if (lastEmailChangeDate > sevenDaysAgo) return sendError(next, "try change email later", 403);
         }
+        const emailInLowerCaseForm = email.toLowerCase();
         // update email
-        user.email = email.toLowerCase();
+        user.email = emailInLowerCaseForm
         user.emailChangedAt = Date.now();
         user.verified = false;
         await user.save();
@@ -379,21 +373,21 @@ const updateEmail = catchError(
         const newCode = generateVerificationCode();
         Promise.all([
             VerificationCodeModel.create({ user: userId, code: newCode }),
-            sendVerifyEmail(email, newCode)
+            sendVerifyEmail(emailInLowerCaseForm, newCode)
         ])
 
         // generate new token 
         const userData = extractUserData(user, true);
         const token = generateToken(userData);
 
-        AuthService.setAuthToken(res, token);
 
         res.status(200).json({
             message: "success",
             results: {
                 email: user.email,
                 verified: user.verified,
-                emailChangedAt: user.emailChangedAt
+                emailChangedAt: user.emailChangedAt,
+                token
             },
         })
 
@@ -424,11 +418,11 @@ const updatePassword = catchError(
         // Generate token and send it back as a cookie
         const userData = extractUserData(user)
         const token = generateToken(userData)
-        AuthService.setAuthToken(res, token);
         res.status(200).json({
             message: "success",
             results: {
-                passwordChangedAt: passwordChangedAt
+                passwordChangedAt: passwordChangedAt,
+                token
             }
         })
     }
@@ -491,7 +485,6 @@ const resetPassword = catchError(
 const keepAlive = catchError(
     async (req, res, next) => {
         const userId = req.user._id;
-        console.log("🟢 Keepalive request for user:", userId)
         await StatusService.keepAlive(userId);
         res.status(200).json({ message: "success" })
 
@@ -512,7 +505,6 @@ export {
     signup,
     signin,
     me,
-    logout,
     uploadProfileImage,
     uploadCoverImage,
     updateBio,

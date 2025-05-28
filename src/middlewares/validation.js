@@ -10,11 +10,8 @@ export const validation = (schema) => {
     } catch (error) {
       if (error.name === "ValidationError") {
         const errors = error.errors;
-        console.log("13" , errors);
-        
         return next(new AppError(errors, 400)); 
       }
-      console.log("13" , error);
       return next(new AppError("Validation error", 500));
     }
   };

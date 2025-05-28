@@ -30,7 +30,6 @@ export class StatusService {
     }
 
     static async setupExpiryListener() {
-        console.log("🔵 Starting Redis expiry listener");
         const redisService = new RedisService();
         await redisService.setupExpiryListener(async (userId) => {
             const date = new Date();
@@ -42,8 +41,6 @@ export class StatusService {
                 isOnline: user.isOnline,
                 lastSeen: user.lastSeen,
             })
-
-            console.log("✅ Offline status Pusher event triggered")
         })
     }
 

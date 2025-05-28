@@ -8,7 +8,7 @@ let io;
 const setupSocket = (server) => {
     io = new Server(server, {
         cors: {
-            origin: "https://talk-chat-rho.vercel.app",
+            origin: process.env.FRONTEND_DOMAIN,
             methods: ["GET", "POST"],
             credentials: true
         }

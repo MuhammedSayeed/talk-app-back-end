@@ -7,7 +7,6 @@ import { IdSchema } from "../../schemas/id.js";
 const router = express.Router();
 
 router.get("/", controller.verifyToken, controller.search)
-router.post("/logout", controller.verifyToken, controller.logout);
 router.get("/me", controller.verifyToken, controller.me)
 router.get("/auth/exchane-token", controller.verifyToken, controller.exchangeToken)
 router.get("/profile/:id", validation(IdSchema), controller.verifyToken, controller.getUser)
