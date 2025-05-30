@@ -15,12 +15,7 @@ const setupSocket = (server) => {
     })
 
     io.use((socket, next) => {
-        const cookieHeader = socket.handshake.headers.cookie;
-
-        if (!cookieHeader) return sendError(next, "Unauthorized", 400);
-
-        const cookies = parse(cookieHeader);
-        const token = cookies.token;
+        const token = socket.handshake.auth?.token;
 
         if (!token) return sendError(next, "Unauthorized", 400);
 
@@ -36,12 +31,12 @@ const setupSocket = (server) => {
     io.on("connection", (socket) => {
         // Join personal room for direct events
         socket.join(`user-${socket.userId}`);
-    
+
         // ✅ Join any custom room (مثل user-status)
         socket.on("join-room", (roomName) => {
             socket.join(roomName);
         });
-    
+
         // ✅ Leave room if needed
         socket.on("leave-room", (roomName) => {
             socket.leave(roomName);
