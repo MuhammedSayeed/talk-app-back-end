@@ -10,7 +10,7 @@ const router = express.Router();
 
 
 router.get("/:id", validation(IdSchema), verifyToken, controller.getMessages)
-router.post("/", validation(sendMessageSchema), verifyToken, checkMessageType, controller.sendMessage)
+router.post("/", verifyToken, checkMessageType, validation(sendMessageSchema), controller.sendMessage)
 router.patch("/mark-seen/:chatId", verifyToken, controller.markMessagesAsSeen)
 
 export default router;

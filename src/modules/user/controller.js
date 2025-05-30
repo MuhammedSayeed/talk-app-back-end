@@ -4,7 +4,7 @@ import { UserModel } from "../../../databases/models/user.js"
 import { AuthService } from "../../services/auth-service.js";
 import { RelationshipService } from "../../services/relationship-service.js";
 import { MediaService } from "../../services/media-service.js";
-import { StatusService } from "../../services/status-service.js";
+// import { StatusService } from "../../services/status-service.js";
 import { passwordResetTokenModel } from "../../../databases/models/PasswordResetTokens.js";
 import { sendResetPasswordLink, sendVerifyEmail } from "../../config/email.js";
 import { ApiFeatures } from "../../utils/apiFeatures.js";
@@ -124,7 +124,7 @@ const verifyToken = catchError(
     }
 )
 const verifyTempToken = catchError(
-    async (req,res,next)=>{
+    async (req, res, next) => {
         const token = req.query.token;
         if (!token) return sendError(next, 'Not authorized', 401);
 
@@ -365,7 +365,7 @@ const updateEmail = catchError(
         const { email } = req.body
 
         // check if email is already in use
-        const existingUser = await UserModel.exists({ email });
+        const existingUser = await UserModel.findOne({ email }).lean();
         if (existingUser) return sendError(next, "Email already exists.", 400);
         // get user
         const user = await UserModel.findById(userId).select("email emailChangedAt verified _id");
@@ -497,16 +497,16 @@ const resetPassword = catchError(
 )
 const keepAlive = catchError(
     async (req, res, next) => {
-        const userId = req.user._id;
-        await StatusService.keepAlive(userId);
+        // const userId = req.user._id;
+        // await StatusService.keepAlive(userId);
         res.status(200).json({ message: "success" })
 
     }
 )
-const setupRedisListener = async () => {
-    await StatusService.setupExpiryListener();
-}
-await setupRedisListener();
+// const setupRedisListener = async () => {
+//     await StatusService.setupExpiryListener();
+// }
+// await setupRedisListener();
 
 
 export {

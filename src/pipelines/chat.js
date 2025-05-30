@@ -74,6 +74,7 @@ export const buildChatPipeline = (loggedInUser, searchQuery) => {
               sender: 1,
               createdAt: 1,
               isRead: 1,
+              type : 1
             },
           },
         ],

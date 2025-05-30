@@ -12,7 +12,7 @@ const transporter = nodemailer.createTransport({
 });
 
 const sendResetPasswordLink = async (email, token) => {
-    const resetUrl = `http://localhost:3000/reset-password/${token}`;
+    const resetUrl = `${process.env.FRONTEND_DOMAIN}/reset-password/${token}`;
     try {
         // Only log minimal info, not the entire response
         const info = await transporter.sendMail({
