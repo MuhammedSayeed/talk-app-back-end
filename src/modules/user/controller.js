@@ -102,7 +102,8 @@ const verifyEmail = catchError(
 const verifyToken = catchError(
     async (req, res, next) => {
         // Extract token
-        const token = req.cookies?.token ?? req.query?.token;
+        const token = req.headers.authorization.split(" ")[1];
+
         if (!token) return sendError(next, 'Not authorized', 401);
         // Verify token
         const decoded = AuthService.verifyToken(token);
@@ -118,6 +119,18 @@ const verifyToken = catchError(
             }
         }
         // pass user
+        req.user = decoded;
+        next();
+    }
+)
+const verifyTempToken = catchError(
+    async (req,res,next)=>{
+        const token = req.query.token;
+        if (!token) return sendError(next, 'Not authorized', 401);
+
+        const decoded = AuthService.verifyToken(token);
+        if (!decoded?._id) return sendError(next, 'Invalid token', 401);
+
         req.user = decoded;
         next();
     }
@@ -499,6 +512,7 @@ await setupRedisListener();
 export {
     search,
     verifyToken,
+    verifyTempToken,
     getUser,
     verifyEmail,
     verifyPassword,

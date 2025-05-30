@@ -48,7 +48,7 @@ const getChat = catchError(
 const getChats = catchError(
     async (req, res, next) => {
         const { data, metadata } = await getAggregateService(req.user._id, req.query, ChatModel, buildChatPipeline);
-        
+
         res.status(200).json({
             message: "success",
             metadata,
@@ -82,7 +82,6 @@ const deleteChat = catchError(
         const loggedInUser = req.user._id;
         const chatDoc = await ChatModel.findOneAndUpdate({ _id: chatId, users: loggedInUser, isDeleted: false }, { isDeleted: true, deletedAt: new Date() });
         if (!chatDoc) return sendError(next, "someting went wrong", 400);
-
 
         chatDoc.users.forEach((_id) => {
             io.to(`user-${_id}`).emit("chat-deleted", chatId)
