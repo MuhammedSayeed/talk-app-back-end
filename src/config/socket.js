@@ -1,6 +1,5 @@
 import { Server } from "socket.io";
 import { sendError } from "../utils/index.js";
-import { parse } from "cookie";
 import jwt from 'jsonwebtoken'
 
 let io;
