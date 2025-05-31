@@ -4,7 +4,7 @@ import { UserModel } from "../../../databases/models/user.js"
 import { AuthService } from "../../services/auth-service.js";
 import { RelationshipService } from "../../services/relationship-service.js";
 import { MediaService } from "../../services/media-service.js";
-// import { StatusService } from "../../services/status-service.js";
+import { StatusService } from "../../services/status-service.js";
 import { passwordResetTokenModel } from "../../../databases/models/PasswordResetTokens.js";
 import { sendResetPasswordLink, sendVerifyEmail } from "../../config/email.js";
 import { ApiFeatures } from "../../utils/apiFeatures.js";
