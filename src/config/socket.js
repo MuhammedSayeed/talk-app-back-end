@@ -31,7 +31,7 @@ const setupSocket = (server) => {
         // Join personal room for direct events
         socket.join(`user-${socket.userId}`);
 
-        // ✅ Join any custom room (مثل user-status)
+        // ✅ Join any custom room
         socket.on("join-room", (roomName) => {
             socket.join(roomName);
         });

@@ -32,13 +32,13 @@ const blockUser = catchError(
         if (!user) return sendError(next, "User not found.", 404);
 
         // check if user already blocked
-        const blockedUser = await BlockModel.findOne({
+        const blockDoc = await BlockModel.findOne({
             $or: [
                 { blocker: loggedInUser, blocked: blockedUserId },
                 { blocker: blockedUserId, blocked: loggedInUser }
             ]
         });
-        if (blockedUser) return sendError(next, "Something went wrong.", 400);
+        if (blockDoc) return sendError(next, "Something went wrong.", 400);
 
         // delete pending friend request if existing
         await FriendRequestModel.findOneAndDelete({
@@ -67,7 +67,7 @@ const blockUser = catchError(
         const blockDocUsers = [loggedInUser, blockedUserId];
 
 
-        
+
         blockDocUsers.forEach(user => {
             io.to(`user-${user}`).emit("block", {
                 blockStatus: true,
@@ -92,13 +92,16 @@ const unblock = catchError(
         const user = await UserModel.findById(blockedUserId);
         if (!user) return sendError(next, "User not found.", 404);
 
-        // delete block doc
-        await BlockModel.deleteOne({
+        // get block doc
+        const blockDoc = await BlockModel.findOne({
             $and: [
                 { blocker: loggedInUser },
                 { blocked: blockedUserId }
             ]
         });
+        if (!blockDoc) return sendError(next, "Something went wrong.", 400);
+        // delete block doc
+        await blockDoc.deleteOne();
 
         const blockDocUsers = [loggedInUser, blockedUserId];
 
