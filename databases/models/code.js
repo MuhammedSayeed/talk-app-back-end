@@ -12,7 +12,7 @@ const verificationCode = new Schema({
     },
     expireDate: {
         type: Date,
-        default: new Date(Date.now() + 15 * 60 * 1000),
+        default: () => new Date(Date.now() + 15 * 60 * 1000),
     },
     isUsed: {
         type: Boolean,
