@@ -19,9 +19,11 @@ const ENDPOINTBASE = "/api/v1";
 
 export function init(app) {
     app.use(cors(corsOptions));
-    app.use(express.json({limit : "10mb"}));
+    app.use(express.json({ limit: "10mb" }));
     app.use(cookieParser());
-
+    app.get("/", (req, res) => {
+        res.send("Talk app");
+    });
     app.use(`${ENDPOINTBASE}/users`, userRouter)
     app.use(`${ENDPOINTBASE}/codes`, codeRouter)
     app.use(`${ENDPOINTBASE}/blocks`, blockRouter)
